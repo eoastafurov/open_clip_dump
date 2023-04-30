@@ -191,7 +191,6 @@ class CLIP(nn.Module):
 
         text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
         self.transformer = text.transformer
-        self.context_length = text.context_length
         self.vocab_size = text.vocab_size
         self.token_embedding = text.token_embedding
         self.positional_embedding = text.positional_embedding
@@ -200,6 +199,7 @@ class CLIP(nn.Module):
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
 
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.is_convert_to_onnx = False
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -225,7 +225,7 @@ class CLIP(nn.Module):
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
-        x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
+        x = x[torch.arange(x.shape[0]), text.to(torch.float32).argmax(dim=-1)] @ self.text_projection
         return F.normalize(x, dim=-1) if normalize else x
 
     def forward(self, image, text):
@@ -237,6 +237,15 @@ class CLIP(nn.Module):
                 "text_features": text_features,
                 "logit_scale": self.logit_scale.exp()
             }
+        if self.is_convert_to_onnx:
+            # normalized features
+            image_features = image_features / image_features.norm(dim=1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=1, keepdim=True)
+            # cosine similarity as logits
+            logit_scale = self.logit_scale.exp()
+            logits_per_image = logit_scale * image_features @ text_features.t()
+            logits_per_text = logits_per_image.t()
+            return logits_per_image, logits_per_text
         return image_features, text_features, self.logit_scale.exp()
 
 
@@ -256,9 +265,8 @@ class CustomTextCLIP(nn.Module):
         self.output_dict = output_dict
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
         self.text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
-        self.context_length = self.text.context_length
-        self.vocab_size = self.text.vocab_size
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.is_convert_to_onnx = False
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -289,6 +297,16 @@ class CustomTextCLIP(nn.Module):
                 "text_features": text_features,
                 "logit_scale": self.logit_scale.exp()
             }
+        if self.is_convert_to_onnx:
+            # normalized features
+            image_features = image_features / image_features.norm(dim=1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=1, keepdim=True)
+            # cosine similarity as logits
+            logit_scale = self.logit_scale.exp()
+            logits_per_image = logit_scale * image_features @ text_features.t()
+            logits_per_text = logits_per_image.t()
+            return logits_per_image, logits_per_text
+
         return image_features, text_features, self.logit_scale.exp()
 
 

@@ -308,8 +308,6 @@ class Transformer(nn.Module):
         ])
 
     def get_cast_dtype(self) -> torch.dtype:
-        if hasattr(self.resblocks[0].mlp.c_fc, 'int8_original_dtype'):
-            return self.resblocks[0].mlp.c_fc.int8_original_dtype
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
@@ -620,7 +618,7 @@ class TextTransformer(nn.Module):
             pooled = self.ln_final(pooled)
         else:
             x = self.ln_final(x)
-            pooled, tokens = x[torch.arange(x.shape[0]), text.argmax(dim=-1)], x
+            pooled, tokens = x[torch.arange(x.shape[0]), text.to(torch.float32).argmax(dim=-1)], x
 
         if self.text_projection is not None:
             pooled = pooled @ self.text_projection
